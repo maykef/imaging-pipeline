@@ -1,4 +1,47 @@
-#!/bin/bash
+# Create from YAML file if it exists, otherwise create minimal and pip install
+if [ -f "environment_imaging.yml" ]; then
+  log_info "Creating from environment_imaging.yml..."
+  mamba env create -f environment_imaging.yml --yes
+else
+  log_info "environment_imaging.yml not found. Creating minimal environment..."
+  mamba create -n imaging_pipeline python=3.11 pip numpy scipy scikit-image scikit-learn pandas matplotlib -y
+fi
+
+log_success "Base environment created."
+
+# Always activate and run pip install
+log_info "Activating imaging_pipeline..."
+mamba activate imaging_pipeline
+
+# Create requirements file
+cat > /tmp/imaging_requirements.txt << 'REQS'
+aicspylibczi>=3.3.0
+czifile>=2019.7.2
+tifffile>=2024.1.0
+imagecodecs>=2024.1.0
+SimpleITK>=2.2.0
+pycpd>=0.2.1
+zarr>=2.16.0
+ome-zarr-py>=0.8.0
+dask[array]>=2023.12.0
+cellpose==3.0.8
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+napari>=0.4.18
+napari-aicsimageio>=0.8.1
+aicsimageio>=0.9.0
+seaborn>=0.13.0
+opencv-python>=4.8.0
+openpyxl>=3.1.0
+numpy-stl>=3.1.0
+REQS
+
+log_info "Installing imaging packages via pip (this may take 10-15 minutes)..."
+pip install --upgrade -r /tmp/imaging_requirements.txt
+rm /tmp/imaging_requirements.txt
+
+log_success "All packages installed."#!/bin/bash
 
 ################################################################################
 # Lightsheet Microscopy Image Processing Pipeline Setup Script
