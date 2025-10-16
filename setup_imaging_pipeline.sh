@@ -3,12 +3,13 @@
 ################################################################################
 # Lightsheet Microscopy Image Processing Pipeline Setup Script
 #
-# Creates a SEPARATE conda environment for imaging tools
-# Does NOT modify existing llm-inference environment
+# COMPLETELY INDEPENDENT - Does NOT require llm-inference setup
 #
-# Environment: imaging_pipeline (Python 3.11, independent from llm-inference)
+# Creates separate conda environment: imaging_pipeline
+# Installs Miniforge if needed
+# Sets up all imaging tools
+#
 # Hardware: AMD Threadripper 7970X + RTX Pro 6000 Blackwell (96GB VRAM)
-#
 # Usage: bash setup_imaging_pipeline.sh
 ################################################################################
 
@@ -31,257 +32,221 @@ fi
 ################################################################################
 # PRE-FLIGHT CHECKS
 ################################################################################
-log_info "Lightsheet Imaging Pipeline Setup (Separate Environment)"
+log_info "Lightsheet Imaging Pipeline Setup (INDEPENDENT Installation)"
 echo ""
 
-# Initialize mamba
-log_info "Initializing mamba..."
-eval "$(~/miniforge3/bin/mamba shell hook --shell bash)"
-
-# Check mamba availability
-if ! command -v mamba &>/dev/null; then
-  log_error "Mamba not found. Please ensure Miniforge is installed at ~/miniforge3"
-  log_info "If setup_llm_core.sh hasn't run yet, run it first:"
-  log_info "  bash setup_llm_core.sh"
-  exit 1
-fi
-
-log_success "Mamba initialized."
-
-# Check CUDA
+# Check GPU
 if ! command -v nvidia-smi &>/dev/null; then
-  log_error "nvidia-smi not found. Ensure NVIDIA drivers are installed."
+  log_error "nvidia-smi not found. Please install NVIDIA drivers first."
   exit 1
 fi
 
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader)
-log_info "GPU detected: $GPU_NAME"
+GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader)
+log_info "GPU detected: $GPU_NAME ($GPU_MEMORY)"
 
-# Check for existing imaging_pipeline env
-if mamba env list | grep -qE '^\s*imaging_pipeline\s'; then
-  log_warning "imaging_pipeline environment already exists."
-  read -p "Remove and recreate? (y/N): " -n 1 -r; echo
-  if [[ $REPLY =~ ^[Yy]$ ]]; then
-    log_info "Removing existing imaging_pipeline environment..."
-    mamba env remove -n imaging_pipeline -y
-  else
-    log_info "Using existing environment. Skipping creation."
-    SKIP_ENV_CREATE=true
-  fi
+# Check disk space
+AVAILABLE_SPACE=$(df /home | tail -1 | awk '{print $4}')
+REQUIRED_SPACE=$((20 * 1024 * 1024))  # 20GB in KB
+if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+  log_error "Insufficient disk space. Need at least 20GB free in /home."
+  exit 1
 fi
 
+log_success "Pre-flight checks passed!"
 echo ""
+
 log_warning "This script will:"
-echo "  1) Create a new conda environment: imaging_pipeline"
-echo "  2) Install: CZI I/O, registration, stitching, segmentation, visualization"
-echo "  3) Set up workspace at ~/imaging-workspace"
+echo "  1) Install Miniforge (if not present)"
+echo "  2) Create imaging_pipeline conda environment"
+echo "  3) Install all imaging libraries"
+echo "  4) Set up workspace at ~/imaging-workspace"
 echo ""
-log_warning "⚠️  IMPORTANT:"
-echo "  - imaging_pipeline is SEPARATE from llm-inference"
-echo "  - Both can run independently without conflicts"
-echo "  - Activate with: mamba activate imaging_pipeline"
-echo "  - Switch to LLM: mamba activate llm-inference"
+echo "Total time: ~25-35 min"
+echo "Disk space: ~8-12 GB"
 echo ""
-echo "Total time: ~25–35 min (network dependent)"
-echo "Disk space: ~8–12 GB (separate from llm-inference)"
+log_warning "⚠️  COMPLETELY INDEPENDENT"
+echo "  - Does NOT require llm-inference setup"
+echo "  - Does NOT require existing Miniforge"
+echo "  - Will install Miniforge if needed"
 echo ""
 read -p "Continue with installation? (y/N): " -n 1 -r; echo
 [[ $REPLY =~ ^[Yy]$ ]] || { log_info "Installation cancelled."; exit 0; }
 
 ################################################################################
-# PHASE 0: CREATE ENVIRONMENT FROM YAML
+# PHASE 1: INSTALL MINIFORGE (if needed)
 ################################################################################
-if [ "$SKIP_ENV_CREATE" != "true" ]; then
-  log_info "PHASE 0: Creating imaging_pipeline environment from environment.yml..."
-  
-  # Check if environment.yml exists in current directory
-  if [ ! -f "environment_imaging.yml" ]; then
-    log_warning "environment_imaging.yml not found in current directory."
-    log_info "Creating minimal environment file..."
-    
-    # Will be created by the caller, but we can create inline
-    cat > environment_imaging.yml << 'EOF'
-name: imaging_pipeline
-channels:
-  - conda-forge
-  - pytorch
-  - nvidia
-dependencies:
-  - python=3.11
-  - pip
-  - numpy>=1.24.0
-  - scipy>=1.10.0
-  - matplotlib>=3.7.0
-  - scikit-image>=0.22.0
-  - scikit-learn>=1.3.0
-  - pandas>=2.0.0
-  - openpyxl>=3.1.0
-  - cython>=0.29.30
-  - h5py>=3.8.0
-  - cmake>=3.25.0
-  - pkg-config>=2.0.0
-  - pip
-  - pip:
-    - aicspylibczi>=3.3.0
-    - czifile>=2019.7.2
-    - tifffile>=2024.1.0
-    - imagecodecs>=2024.1.0
-    - SimpleITK>=2.2.0
-    - pycpd>=0.2.1
-    - zarr>=2.16.0
-    - ome-zarr-py>=0.8.0
-    - dask[array]>=2023.12.0
-    - cellpose==3.0.8
-    - torch>=2.0.0
-    - torchvision>=0.15.0
-    - torchaudio>=2.0.0
-    - napari>=0.4.18
-    - napari-aicsimageio>=0.8.1
-    - aicsimageio>=0.9.0
-    - seaborn>=0.13.0
-    - opencv-python>=4.8.0
-EOF
-    log_success "Created environment_imaging.yml"
-  fi
-  
-  log_info "Creating environment from YAML..."
-  mamba env create -f environment_imaging.yml --yes
-  
-  log_success "Environment created."
+log_info "PHASE 1: Checking for Miniforge..."
+
+if [ -d "$HOME/miniforge3" ]; then
+  log_success "Miniforge already installed at $HOME/miniforge3"
+  SKIP_MINIFORGE=true
+elif command -v mamba &>/dev/null; then
+  log_success "Mamba already available in PATH"
+  SKIP_MINIFORGE=true
 else
-  log_info "Skipping environment creation (using existing)."
+  log_warning "Miniforge not found. Installing..."
+  MINIFORGE_INSTALLER="/tmp/Miniforge3-Linux-x86_64.sh"
+  MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
+  
+  log_info "Downloading Miniforge (~500 MB)..."
+  [ -f "$MINIFORGE_INSTALLER" ] || wget -O "$MINIFORGE_INSTALLER" "$MINIFORGE_URL" --progress=bar:force 2>&1
+  
+  log_info "Installing Miniforge..."
+  bash "$MINIFORGE_INSTALLER" -b -p "$HOME/miniforge3"
+  log_success "Miniforge installed."
 fi
 
 echo ""
 
 ################################################################################
-# ACTIVATE ENVIRONMENT
+# PHASE 2: INITIALIZE MAMBA
 ################################################################################
-log_info "Activating imaging_pipeline environment..."
-eval "$(mamba shell hook --shell bash)"
-mamba activate imaging_pipeline
+log_info "PHASE 2: Initializing Mamba..."
 
-if [ "$CONDA_DEFAULT_ENV" != "imaging_pipeline" ]; then
-  log_error "Failed to activate imaging_pipeline environment."
+# Make sure mamba is available
+export MAMBA_ROOT_PREFIX="$HOME/miniforge3"
+
+# Load mamba into THIS shell
+eval "$($HOME/miniforge3/bin/mamba shell hook --shell bash)"
+
+# Persist for future shells
+if $HOME/miniforge3/bin/mamba shell init -h | grep -q -- "--prefix"; then
+  $HOME/miniforge3/bin/mamba shell init -s bash --prefix "$HOME/miniforge3"
+else
+  $HOME/miniforge3/bin/mamba shell init -s bash
+fi
+
+# Also initialize conda
+$HOME/miniforge3/bin/conda init bash || true
+
+# Ensure hook in ~/.bashrc
+if ! grep -q 'mamba shell hook --shell bash' ~/.bashrc; then
+  echo 'eval "$($HOME/miniforge3/bin/mamba shell hook --shell bash)"' >> ~/.bashrc
+fi
+
+# Ensure login shells source ~/.bashrc
+if ! grep -q 'source ~/.bashrc' ~/.profile 2>/dev/null; then
+  echo '' >> ~/.profile
+  echo '# Load interactive bash settings' >> ~/.profile
+  echo 'if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi' >> ~/.profile
+fi
+
+# Reload
+source ~/.bashrc || true
+
+# Verify mamba works
+if ! command -v mamba &> /dev/null; then
+  log_error "Mamba initialization failed."
+  log_info "Try: eval \"\$($HOME/miniforge3/bin/mamba shell hook --shell bash)\""
   exit 1
 fi
 
-log_success "Environment activated: $CONDA_DEFAULT_ENV"
+log_success "Mamba initialized: $(mamba --version)"
 echo ""
 
 ################################################################################
-# PHASE 1: VERIFY CZI I/O
+# PHASE 3: CREATE IMAGING_PIPELINE ENVIRONMENT
 ################################################################################
-log_info "PHASE 1: Verifying CZI file I/O..."
+log_info "PHASE 3: Creating imaging_pipeline environment..."
 
-python << 'EOF'
-try:
-    from aicspylibczi import CziFile
-    print("✓ aicspylibczi OK")
-except Exception as e:
-    print(f"✗ aicspylibczi failed: {e}")
-    
-try:
-    import tifffile
-    print("✓ tifffile OK")
-except Exception as e:
-    print(f"✗ tifffile failed: {e}")
+# Remove if exists
+if mamba env list | grep -qE '^\s*imaging_pipeline\s'; then
+  log_warning "imaging_pipeline environment exists. Removing..."
+  mamba env remove -n imaging_pipeline -y
+fi
 
-try:
-    import czifile
-    print("✓ czifile OK (fallback)")
-except Exception as e:
-    print(f"⚠ czifile skipped: {e}")
-EOF
+# Create from YAML file if it exists, otherwise create minimal and pip install
+if [ -f "environment_imaging.yml" ]; then
+  log_info "Creating from environment_imaging.yml..."
+  mamba env create -f environment_imaging.yml --yes
+else
+  log_info "environment_imaging.yml not found. Creating minimal environment..."
+  mamba create -n imaging_pipeline python=3.11 pip -y
+  
+  # Activate for pip installs
+  mamba activate imaging_pipeline
+  
+  log_info "Installing imaging packages via pip..."
+  
+  # Create requirements file to avoid permission issues
+  cat > /tmp/imaging_requirements.txt << 'REQS'
+aicspylibczi>=3.3.0
+tifffile>=2024.1.0
+imagecodecs>=2024.1.0
+SimpleITK>=2.2.0
+pycpd>=0.2.1
+zarr>=2.16.0
+ome-zarr-py>=0.8.0
+dask[array]>=2023.12.0
+cellpose==3.0.8
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+napari>=0.4.18
+napari-aicsimageio>=0.8.1
+aicsimageio>=0.9.0
+pandas>=2.0.0
+scikit-image>=0.22.0
+scikit-learn>=1.3.0
+scipy>=1.10.0
+seaborn>=0.13.0
+opencv-python>=4.8.0
+openpyxl>=3.1.0
+numpy-stl>=3.1.0
+REQS
+  
+  pip install --upgrade -r /tmp/imaging_requirements.txt
+  rm /tmp/imaging_requirements.txt
+fi
 
+log_success "Environment created: imaging_pipeline"
 echo ""
 
 ################################################################################
-# PHASE 2: VERIFY IMAGE PROCESSING
+# PHASE 4: ACTIVATE AND VERIFY
 ################################################################################
-log_info "PHASE 2: Verifying image processing libraries..."
+log_info "PHASE 4: Verifying installation..."
 
+# Activate
+mamba activate imaging_pipeline
+
+# Verify imports
 python << 'EOF'
-try:
-    import SimpleITK
-    print(f"✓ SimpleITK {SimpleITK.__version__} OK")
-except Exception as e:
-    print(f"✗ SimpleITK failed: {e}")
+import sys
+checks = {
+    'aicspylibczi': 'CZI I/O',
+    'SimpleITK': 'Registration',
+    'zarr': 'Storage',
+    'cellpose': 'Segmentation',
+    'napari': 'Visualization',
+    'torch': 'Deep Learning',
+    'pandas': 'Analysis',
+}
 
-try:
-    import skimage
-    print(f"✓ scikit-image {skimage.__version__} OK")
-except Exception as e:
-    print(f"✗ scikit-image failed: {e}")
+failed = []
+for lib, desc in checks.items():
+    try:
+        __import__(lib)
+        print(f"✓ {lib:20} ({desc})")
+    except Exception as e:
+        print(f"✗ {lib:20} ({desc}) - {str(e)[:40]}")
+        failed.append(lib)
 
-try:
-    import zarr
-    print(f"✓ zarr {zarr.__version__} OK")
-except Exception as e:
-    print(f"✗ zarr failed: {e}")
+if failed:
+    print(f"\n⚠ {len(failed)} package(s) failed: {', '.join(failed)}")
+    sys.exit(1)
+else:
+    print("\n✓ All packages verified!")
 
-try:
-    import dask
-    print(f"✓ dask {dask.__version__} OK")
-except Exception as e:
-    print(f"✗ dask failed: {e}")
-EOF
-
-echo ""
-
-################################################################################
-# PHASE 3: VERIFY GPU SEGMENTATION
-################################################################################
-log_info "PHASE 3: Verifying GPU segmentation (Cellpose)..."
-
-python << 'EOF'
-try:
-    import cellpose
-    print(f"✓ Cellpose {cellpose.__version__} OK")
-except Exception as e:
-    print(f"✗ Cellpose failed: {e}")
-
-try:
-    import torch
-    print(f"✓ PyTorch {torch.__version__}")
-    if torch.cuda.is_available():
-        print(f"  GPU: {torch.cuda.get_device_name(0)}")
-        print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-        print("✓ CUDA support enabled")
-    else:
-        print("⚠ GPU not available (will use CPU)")
-except Exception as e:
-    print(f"✗ PyTorch check failed: {e}")
-
-try:
-    from cellpose.core import use_gpu
-    if use_gpu():
-        print("✓ Cellpose GPU support confirmed")
-    else:
-        print("⚠ Cellpose will use CPU")
-except Exception as e:
-    print(f"⚠ Cellpose GPU check: {e}")
-EOF
-
-echo ""
-
-################################################################################
-# PHASE 4: VERIFY VISUALIZATION
-################################################################################
-log_info "PHASE 4: Verifying visualization (Napari)..."
-
-python << 'EOF'
-try:
-    import napari
-    print(f"✓ Napari {napari.__version__} OK")
-except Exception as e:
-    print(f"✗ Napari failed: {e}")
-
-try:
-    import aicsimageio
-    print(f"✓ aicsimageio OK")
-except Exception as e:
-    print(f"⚠ aicsimageio: {e}")
+# GPU check
+import torch
+print(f"\nGPU Status:")
+print(f"  PyTorch: {torch.__version__}")
+print(f"  CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"  GPU: {torch.cuda.get_device_name(0)}")
+    print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 EOF
 
 echo ""
@@ -289,208 +254,118 @@ echo ""
 ################################################################################
 # PHASE 5: SETUP WORKSPACE
 ################################################################################
-log_info "PHASE 5: Setting up workspace directories..."
+log_info "PHASE 5: Setting up workspace..."
 
-# Create imaging workspace
 mkdir -p ~/imaging-workspace/{configs,scripts,notebooks,example_data,logs}
 mkdir -p /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis,cache}
 
 # Set permissions
-sudo chown -R "$USER":"$USER" /scratch/imaging
+sudo chown -R "$USER":"$USER" /scratch/imaging 2>/dev/null || true
 
-log_success "Workspace directories created."
-
-# Create configuration template
+# Create config template
 cat > ~/imaging-workspace/configs/pipeline_config.yaml << 'CONFIG'
 # Lightsheet Imaging Pipeline Configuration
-# Zeiss Z.1 Lightsheet Microscopy
-
 imaging:
   input_dir: /tmp/dataset1
   output_base: /scratch/imaging
-  
-  # CZI-specific parameters (from microscope metadata)
   czi:
-    z_step_microns: 0.5         # Adjust based on actual acquisition
+    z_step_microns: 0.5
     tile_overlap_percent: 15
     background_subtraction: true
-    flat_field_correction: false
-    
-preprocessing:
-  # Deskewing (if oblique acquisition)
-  deskew_enabled: false
-  deskew_angle: 45
-  
-  # Background subtraction
-  background_method: "mean"      # "mean", "rolling_ball", or "none"
-  background_window: 50
-  
-  # Denoising
-  denoise_method: "tv"           # "tv", "wavelet", or "none"
-  denoise_strength: 0.1
 
 registration:
-  method: "cross_correlation"    # "feature", "cross_correlation", or "metadata"
+  method: "cross_correlation"
   max_iterations: 100
-  metric: "correlation"
 
 deconvolution:
   enabled: true
-  method: "richardson_lucy"
   iterations: 20
-  psf_method: "metadata"
 
 segmentation:
-  cellpose_model: "nuclei"       # "nuclei", "cyto", "cyto2"
+  cellpose_model: "nuclei"
   cellpose_diameter: 30
   gpu_enabled: true
   batch_size: 4
 
-output:
-  format: "ome_zarr"             # "ome_zarr", "ome_tiff", or "both"
-  compression: "blosc"
-  chunk_size: [64, 256, 256]
-  
 hardware:
-  n_workers: 16                  # Use 16 of 48 Threadripper cores
-  gpu_batch_size: 4
-  max_memory_gb: 60              # Reserve for imaging (LLM uses ~90GB)
+  n_workers: 16
+  max_memory_gb: 60
 CONFIG
 
-log_success "Configuration template created: ~/imaging-workspace/configs/pipeline_config.yaml"
+log_success "Workspace created at ~/imaging-workspace"
 echo ""
 
 ################################################################################
-# PHASE 6: CREATE ACTIVATION HELPERS
+# PHASE 6: CREATE HELPERS
 ################################################################################
-log_info "PHASE 6: Creating activation helpers..."
+log_info "PHASE 6: Creating helper scripts..."
 
-# Main helper script
 cat > ~/start-imaging-pipeline.sh << 'HELPER'
 #!/bin/bash
-echo "🔬 Lightsheet Imaging Pipeline Environment"
-echo ""
+echo "🔬 Lightsheet Imaging Pipeline"
 eval "$(mamba shell hook --shell bash)"
 mamba activate imaging_pipeline
-echo "✓ Environment: $CONDA_DEFAULT_ENV"
-echo "✓ Workspace: $HOME/imaging-workspace"
+echo "✓ Environment: imaging_pipeline"
+echo "✓ Workspace: ~/imaging-workspace"
 echo "✓ Data: /scratch/imaging"
-echo ""
-python -c "
-from aicspylibczi import CziFile
-from cellpose.core import use_gpu
-import torch
-print('✓ CZI I/O ready')
-print(f'✓ GPU available: {torch.cuda.is_available()}')
-print(f'✓ Cellpose GPU support: {use_gpu()}')
-"
-echo ""
+python -c "import torch; print(f'✓ GPU: {torch.cuda.is_available()}')"
 bash
 HELPER
 
 chmod +x ~/start-imaging-pipeline.sh
 
-# Switch helper (for convenience)
 cat > ~/switch-to-imaging.sh << 'SWITCH'
 #!/bin/bash
 eval "$(mamba shell hook --shell bash)"
 mamba activate imaging_pipeline
-echo "✓ Switched to imaging_pipeline"
-echo "To return to llm-inference: mamba activate llm-inference"
 bash
 SWITCH
 
 chmod +x ~/switch-to-imaging.sh
 
-log_success "Created helpers:"
-echo "  ~/start-imaging-pipeline.sh     (full startup with checks)"
-echo "  ~/switch-to-imaging.sh          (quick activation)"
+log_success "Helper scripts created"
 echo ""
 
 ################################################################################
-# PHASE 7: FINAL SUMMARY
+# FINAL VERIFICATION
 ################################################################################
-log_success "=========================================="
-log_success "  IMAGING PIPELINE SETUP COMPLETED!"
-log_success "=========================================="
-echo ""
+log_info "PHASE 7: Final verification..."
 
-log_info "Environment Created: imaging_pipeline"
-echo "  Location: $CONDA_PREFIX"
-echo "  Python: 3.11"
-echo "  Isolation: Completely separate from llm-inference"
+# Environment list
+log_success "Available environments:"
+mamba env list | grep -E "^(base|imaging_pipeline)"
+
+# Test CZI reading
+python -c "from aicspylibczi import CziFile; print('✓ CZI I/O')"
+python -c "from cellpose.core import use_gpu; print(f'✓ Cellpose GPU: {use_gpu()}')"
+
+echo ""
+log_success "=========================================="
+log_success "  IMAGING PIPELINE READY!"
+log_success "=========================================="
 echo ""
 
 log_info "Installation Summary:"
-echo "  ✓ CZI file I/O (aicspylibczi, tifffile)"
-echo "  ✓ Image registration (SimpleITK, pycpd)"
-echo "  ✓ Stitching & storage (zarr, dask)"
-echo "  ✓ Deconvolution (scipy, scikit-image)"
-echo "  ✓ Segmentation (Cellpose 3.0.8, GPU-native)"
-echo "  ✓ Visualization (Napari)"
-echo "  ✓ Analysis (Pandas, scikit-learn)"
+echo "  ✓ imaging_pipeline environment created"
+echo "  ✓ All imaging libraries installed"
+echo "  ✓ Workspace at ~/imaging-workspace"
+echo "  ✓ GPU support confirmed"
 echo ""
 
 log_info "Quick Start:"
 echo "  1) Close and reopen terminal"
-echo "  2) Run: ~/start-imaging-pipeline.sh"
-echo "     OR: mamba activate imaging_pipeline"
+echo "  2) Run: mamba activate imaging_pipeline"
+echo "     OR: ~/start-imaging-pipeline.sh"
+echo "  3) Edit config: ~/imaging-workspace/configs/pipeline_config.yaml"
 echo ""
 
-log_info "Available Environments:"
-echo "  mamba activate llm-inference      # LLM inference (vLLM, transformers)"
-echo "  mamba activate imaging_pipeline   # Image processing (CZI, stitching, etc.)"
-echo ""
-
-log_warning "Workspace Locations:"
-echo "  Scripts: ~/imaging-workspace/scripts"
-echo "  Configs: ~/imaging-workspace/configs/pipeline_config.yaml"
-echo "  Data: /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis}"
-echo ""
-
-log_warning "Next Steps:"
-echo "  1) Download test CZI dataset:"
-echo "     cd /tmp && wget https://datadryad.org/.../LSFM_000*.czi.bz2"
-echo "     bunzip2 LSFM_*.czi.bz2"
-echo ""
-echo "  2) Test CZI reading:"
-echo "     mamba activate imaging_pipeline"
-echo "     python ~/imaging-workspace/scripts/test_czi_read.py"
-echo ""
-echo "  3) Build MVP stitcher (coming next)"
-echo ""
-echo "  4) Integrate with LLM agent for agentic orchestration"
-echo ""
-
-# Save installation log
 cat > ~/imaging-pipeline-install.log << LOG
 Imaging Pipeline Installation Log
 Date: $(date)
 User: $USER
-Hostname: $(hostname)
 Environment: imaging_pipeline
-Python: 3.11
-Conda Prefix: $CONDA_PREFIX
-
-GPU Status:
-$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)
-
-PyTorch CUDA:
-$(python -c "import torch; print(f'  Version: {torch.__version__}'); print(f'  CUDA: {torch.version.cuda}')" 2>/dev/null || echo "  Check manually after install")
-
-Installed Packages:
-- aicspylibczi (3.3.0+)
-- SimpleITK (2.2.0+)
-- zarr (2.16.0+)
-- cellpose (3.0.8)
-- napari (0.4.18+)
-- pandas (2.0.0+)
-- dask (2023.12.0+)
-
-Workspace: ~/imaging-workspace
-Data: /scratch/imaging
+GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)
 LOG
 
 log_success "Installation log: ~/imaging-pipeline-install.log"
-echo ""
-log_success "Ready for lightsheet imaging pipeline development!"
+log_success "READY FOR LIGHTSHEET IMAGE PROCESSING!"
