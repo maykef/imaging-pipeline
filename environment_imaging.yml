@@ -23,7 +23,6 @@ dependencies:
   - pip>=23.0
   - cython>=0.29.30
   - cmake>=3.25.0
-  - pkg-config>=2.0.0
   - git
 
   # Core Scientific Stack
@@ -39,6 +38,7 @@ dependencies:
   - h5py>=3.8.0
   - libtiff>=4.5.0
   - zstd>=1.5.5
+  - pkg-config
   
   # Optional but useful for dev
   - ipython>=8.10.0
