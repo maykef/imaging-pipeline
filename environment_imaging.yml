@@ -1,5 +1,5 @@
 # Lightsheet Microscopy Image Processing Pipeline
-# Conda Environment Specification
+# Conda Environment Specification (CONDA-ONLY, no pip in YAML)
 #
 # Creates separate environment: imaging_pipeline
 # Python 3.11, independent from llm-inference
@@ -20,7 +20,7 @@ channels:
 dependencies:
   # Python & Build Tools
   - python=3.11
-  - pip>=23.0
+  - pip
   - cython>=0.29.30
   - cmake>=3.25.0
   - git
@@ -38,98 +38,11 @@ dependencies:
   - h5py>=3.8.0
   - libtiff>=4.5.0
   - zstd>=1.5.5
-  - pkg-config
   
   # Optional but useful for dev
   - ipython>=8.10.0
   - jupyter>=1.0.0
-  
-  # Pip-installed packages (pre-release & specific versions)
-  - pip
-  - pip:
-    
-    # ========================================================================
-    # CZI File I/O
-    # ========================================================================
-    - aicspylibczi>=3.3.0           # Fast C++-backed CZI reader (PRIMARY)
-    - czifile>=2019.7.2              # Pure-Python fallback
-    - tifffile>=2024.1.0             # TIFF/OME-TIFF I/O
-    - imagecodecs>=2024.1.0          # Compression codecs
-    
-    # ========================================================================
-    # Registration & Stitching
-    # ========================================================================
-    - SimpleITK>=2.2.0               # Medical image registration (robust)
-    - pycpd>=0.2.1                   # Coherent Point Drift (feature-based)
-    - zarr>=2.16.0                   # Chunked compressed arrays (critical)
-    - ome-zarr-py>=0.8.0             # OME-Zarr metadata & I/O
-    - dask[array]>=2023.12.0         # Parallelized array operations
-    
-    # ========================================================================
-    # GPU-Accelerated Segmentation
-    # ========================================================================
-    # NOTE: Pin Cellpose to 3.0.8 (stable)
-    # 3.1.0+ has known torch tensor indexing issues
-    - cellpose==3.0.8                # Cell/nucleus segmentation (GPU-native)
-    
-    # PyTorch stack (installed separately, not via conda to avoid conflicts)
-    - torch>=2.0.0                   # Deep learning framework
-    - torchvision>=0.15.0            # Computer vision models
-    - torchaudio>=2.0.0              # Audio processing
-    
-    # ========================================================================
-    # Visualization & Interactive Tools
-    # ========================================================================
-    - napari>=0.4.18                 # Multidimensional image viewer
-    - napari-aicsimageio>=0.8.1      # AICS I/O plugin for napari
-    - aicsimageio>=0.9.0             # Universal image I/O (CZI, OME-TIFF, etc.)
-    - seaborn>=0.13.0                # Statistical visualization
-    
-    # ========================================================================
-    # Classical Computer Vision (Optional but useful)
-    # ========================================================================
-    - opencv-python>=4.8.0           # Fallback for classical algorithms
-    
-    # ========================================================================
-    # Analysis & Reporting (Optional)
-    # ========================================================================
-    # (pandas, matplotlib already in conda, included for completeness)
-    - openpyxl>=3.1.0                # Excel export
-    - numpy-stl>=3.1.0               # STL file export (3D meshes)
+  - git
 
-# ============================================================================
-# NOTES
-# ============================================================================
-#
-# Environment Isolation:
-#   This environment is COMPLETELY SEPARATE from llm-inference.
-#   - Different Python 3.11 installation
-#   - Different package versions (no conflicts)
-#   - Can run both simultaneously without interference
-#   - Switch between: mamba activate imaging_pipeline  /  mamba activate llm-inference
-#
-# GPU Memory Management:
-#   - RTX Pro 6000: 96GB VRAM total
-#   - llm-inference: ~60-90GB (for LLM inference with vLLM)
-#   - imaging_pipeline: ~60GB (for segmentation, registration)
-#   - Strategy: Run sequentially OR use Dask for CPU-based registration
-#
-# Storage Performance:
-#   - /scratch/imaging uses NVMe (fast random access)
-#   - Zarr chunking: 256³ voxels optimal for 96GB datasets
-#   - Compression: blosc-zstd (15:1 ratio, preserves quality)
-#
-# Cellpose Version Lock:
-#   Cellpose 3.0.8 is pinned to avoid PyTorch 2.10 tensor indexing issues
-#   in newer versions. Can upgrade once issues are resolved upstream.
-#
-# CZI Reading Priority:
-#   1. aicspylibczi (PRIMARY): Fast C++ backend, handles all Z.1 variants
-#   2. czifile (FALLBACK): Pure Python, slower but good for edge cases
-#   Both installed for robustness.
-#
-# Dask Configuration:
-#   Defaults to using 16 workers (Threadripper: 48 cores)
-#   Leaves 32 cores for OS and other tasks
-#   Can be adjusted in pipeline_config.yaml
-# ============================================================================
+# NOTE: All pip packages installed AFTER environment creation
+# See setup_imaging_pipeline.sh for pip install step
