@@ -3,13 +3,9 @@
 ################################################################################
 # Lightsheet Microscopy Image Processing Pipeline Setup Script
 #
-# COMPLETELY INDEPENDENT - Does NOT require llm-inference setup
-#
 # Creates separate conda environment: imaging_pipeline
-# Installs Miniforge if needed
-# Sets up all imaging tools
+# Installs Miniforge (mamba) if needed; sets up imaging stack
 #
-# Hardware: AMD Threadripper 7970X + RTX Pro 6000 Blackwell (96GB VRAM)
 # Usage: bash setup_imaging_pipeline.sh
 ################################################################################
 
@@ -22,95 +18,65 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Don't run as root
+# No root
 if [ "$EUID" -eq 0 ]; then
-  log_error "Please do not run this script as root or with sudo."
-  log_info  "The script will ask for sudo password when needed."
+  log_error "Do not run as root/sudo."
   exit 1
 fi
 
 ################################################################################
-# PRE-FLIGHT CHECKS
+# PRE-FLIGHT
 ################################################################################
 log_info "Lightsheet Imaging Pipeline Setup (INDEPENDENT Installation)"
 echo ""
 
-# Check GPU
 if ! command -v nvidia-smi &>/dev/null; then
-  log_error "nvidia-smi not found. Please install NVIDIA drivers first."
+  log_error "nvidia-smi not found. Install NVIDIA drivers first."
   exit 1
 fi
 
-GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader)
-GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader)
+GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader | head -1)
 log_info "GPU detected: $GPU_NAME ($GPU_MEMORY)"
 
-# Check disk space
-AVAILABLE_SPACE=$(df /home | tail -1 | awk '{print $4}')
-REQUIRED_SPACE=$((20 * 1024 * 1024))  # 20GB in KB
+AVAILABLE_SPACE=$(df -k "$HOME" | tail -1 | awk '{print $4}')
+REQUIRED_SPACE=$((20 * 1024 * 1024))  # 20GB KB
 if [ "$AVAILABLE_SPACE" -lt "$REQUIRED_SPACE" ]; then
-  log_error "Insufficient disk space. Need at least 20GB free in /home."
+  log_error "Insufficient disk space. Need >= 20 GB free in $HOME."
   exit 1
 fi
 
 log_success "Pre-flight checks passed!"
 echo ""
 
-log_warning "This script will:"
-echo "  1) Install Miniforge (if not present)"
-echo "  2) Create imaging_pipeline conda environment"
-echo "  3) Install all imaging libraries"
-echo "  4) Set up workspace at ~/imaging-workspace"
-echo ""
-echo "Total time: ~25-35 min"
-echo "Disk space: ~8-12 GB"
-echo ""
-log_warning "⚠️  COMPLETELY INDEPENDENT"
-echo "  - Does NOT require llm-inference setup"
-echo "  - Does NOT require existing Miniforge"
-echo "  - Will install Miniforge if needed"
-echo ""
 read -p "Continue with installation? (y/N): " -n 1 -r; echo
 [[ $REPLY =~ ^[Yy]$ ]] || { log_info "Installation cancelled."; exit 0; }
 
 ################################################################################
-# PHASE 1: INSTALL MINIFORGE (if needed)
+# PHASE 1: Miniforge
 ################################################################################
 log_info "PHASE 1: Checking for Miniforge..."
-
 if [ -d "$HOME/miniforge3" ]; then
-  log_success "Miniforge already installed at $HOME/miniforge3"
-  SKIP_MINIFORGE=true
+  log_success "Miniforge at $HOME/miniforge3"
 elif command -v mamba &>/dev/null; then
-  log_success "Mamba already available in PATH"
-  SKIP_MINIFORGE=true
+  log_success "Mamba available in PATH"
 else
-  log_warning "Miniforge not found. Installing..."
-  MINIFORGE_INSTALLER="/tmp/Miniforge3-Linux-x86_64.sh"
-  MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
-  
-  log_info "Downloading Miniforge (~500 MB)..."
-  [ -f "$MINIFORGE_INSTALLER" ] || wget -O "$MINIFORGE_INSTALLER" "$MINIFORGE_URL" --progress=bar:force 2>&1
-  
-  log_info "Installing Miniforge..."
-  bash "$MINIFORGE_INSTALLER" -b -p "$HOME/miniforge3"
+  log_warning "Installing Miniforge..."
+  INST="/tmp/Miniforge3-Linux-x86_64.sh"
+  URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
+  [ -f "$INST" ] || wget -O "$INST" "$URL" --progress=bar:force 2>&1
+  bash "$INST" -b -p "$HOME/miniforge3"
   log_success "Miniforge installed."
 fi
-
 echo ""
 
 ################################################################################
-# PHASE 2: INITIALIZE MAMBA (backward-compatible)
+# PHASE 2: Init mamba
 ################################################################################
-log_info "PHASE 2: Initializing Mamba..."
-
-# Make sure mamba is available
+log_info "PHASE 2: Initializing mamba..."
 export MAMBA_ROOT_PREFIX="$HOME/miniforge3"
-
-# Load mamba into THIS shell so `mamba activate` works non-interactively
 eval "$($HOME/miniforge3/bin/mamba shell hook --shell bash)"
 
-# Best-effort persistent init; tolerate older mamba without --prefix
 set +e
 if "$HOME/miniforge3/bin/mamba" shell init -h 2>&1 | grep -q -- '--prefix'; then
   "$HOME/miniforge3/bin/mamba" shell init -s bash --prefix "$HOME/miniforge3" >/dev/null 2>&1 || true
@@ -119,37 +85,27 @@ else
 fi
 "$HOME/miniforge3/bin/conda" init bash >/dev/null 2>&1 || true
 set -e
-
-# Try sourcing bashrc but don't fail if unavailable
 source ~/.bashrc 2>/dev/null || true
 
-# Verify mamba works
-if ! command -v mamba &> /dev/null; then
-  log_error "Mamba initialization failed."
-  log_info "Try: eval \"\$($HOME/miniforge3/bin/mamba shell hook --shell bash)\""
-  exit 1
-fi
-
-log_success "Mamba initialized: $(mamba --version)"
+command -v mamba >/dev/null || { log_error "Mamba initialization failed."; exit 1; }
+log_success "Mamba: $(mamba --version)"
 echo ""
 
 ################################################################################
-# PHASE 3: CREATE IMAGING_PIPELINE ENVIRONMENT
+# PHASE 3: Create env
 ################################################################################
 log_info "PHASE 3: Creating imaging_pipeline environment..."
 
-# Remove if exists
 if mamba env list | grep -qE '^\s*imaging_pipeline\s'; then
-  log_warning "imaging_pipeline environment exists. Removing..."
+  log_warning "imaging_pipeline exists. Removing..."
   mamba env remove -n imaging_pipeline -y
 fi
 
-# Create from YAML file if it exists, otherwise create minimal and pip install
 if [ -f "environment_imaging.yml" ]; then
   log_info "Creating from environment_imaging.yml..."
   mamba env create -f environment_imaging.yml --yes
 else
-  log_info "environment_imaging.yml not found. Creating minimal environment..."
+  log_info "No YAML found. Creating minimal env..."
   mamba create -n imaging_pipeline python=3.11 pip numpy scipy scikit-image scikit-learn pandas matplotlib -y
 fi
 
@@ -157,75 +113,82 @@ log_success "Base environment created."
 echo ""
 
 ################################################################################
-# PHASE 4: ACTIVATE & INSTALL IMAGING PACKAGES
+# PHASE 4: Install imaging stack (conda-forge/pytorch/nvidia) + small pip
 ################################################################################
 log_info "PHASE 4: Installing imaging packages..."
-
-# Ensure activation works in this non-interactive shell
 eval "$($HOME/miniforge3/bin/mamba shell hook --shell bash)"
 mamba activate imaging_pipeline
 
-# Create requirements file (HEREDOC FIXED: terminator on its own line)
-cat > /tmp/imaging_requirements.txt << 'REQS'
-aicspylibczi>=3.3.0
-czifile>=2019.7.2
-tifffile>=2024.1.0
-imagecodecs>=2024.1.0
-SimpleITK>=2.2.0
-pycpd>=0.2.1
-zarr>=2.16.0
-ome-zarr-py>=0.8.0
-dask[array]>=2023.12.0
-cellpose==3.0.8
-torch>=2.0.0
-torchvision>=0.15.0
-torchaudio>=2.0.0
-napari>=0.4.18
-napari-aicsimageio>=0.8.1
-aicsimageio>=0.9.0
-seaborn>=0.13.0
-opencv-python>=4.8.0
-openpyxl>=3.1.0
-numpy-stl>=3.1.0
-REQS
+# --- PyTorch w/ CUDA (try multiple CUDA minor versions; then CPU fallback) ---
+set +e
+CUDA_OK=0
+for CUDA_VER in 12.4 12.3 12.1; do
+  log_info "Trying CUDA PyTorch (pytorch-cuda=${CUDA_VER})..."
+  mamba install -y -c pytorch -c nvidia pytorch torchvision torchaudio pytorch-cuda=${CUDA_VER}
+  if [ $? -eq 0 ]; then CUDA_OK=1; break; fi
+done
+set -e
+if [ "$CUDA_OK" -eq 0 ]; then
+  log_warning "CUDA PyTorch install failed; installing CPU-only PyTorch."
+  mamba install -y -c conda-forge pytorch torchvision torchaudio
+fi
 
-log_info "Installing imaging packages via pip (this may take a while)..."
+# --- Core compiled/image stack from conda-forge (no pip backtracking) ---
+mamba install -y -c conda-forge \
+  aicspylibczi czifile tifffile imagecodecs \
+  simpleitk \
+  "zarr>=2.16.0,<3.0.0" ome-zarr \
+  dask dask-image \
+  napari pyqt \
+  aicsimageio \
+  opencv openpyxl seaborn numpy-stl
+
+# --- Pip only for the few that are best from PyPI; avoid dependency solving ---
 python -m pip install --upgrade pip
-python -m pip install --upgrade -r /tmp/imaging_requirements.txt
-rm /tmp/imaging_requirements.txt
+python -m pip install --no-build-isolation --no-deps \
+  "cellpose==3.0.8" \
+  "napari-aicsimageio==0.7.2"
 
-log_success "All packages installed."
+# --- Add missing runtime deps Cellpose expects (fastremap, etc.) from conda-forge ---
+mamba install -y -c conda-forge fastremap numba natsort tqdm roifile
+
+# --- If the GPU is Blackwell, replace conda PyTorch with the official cu124 wheels (newer SMs) ---
+if nvidia-smi --query-gpu=name --format=csv,noheader | head -1 | grep -qi "Blackwell"; then
+  log_info "Blackwell GPU detected; switching to PyTorch cu124 wheels for proper SM support…"
+  mamba remove -y pytorch torchvision torchaudio || true
+  python -m pip install --upgrade \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu124
+fi
+
+log_success "All imaging packages installed."
 echo ""
 
 ################################################################################
-# PHASE 5: VERIFY INSTALLATION
+# PHASE 5: Verify
 ################################################################################
 log_info "PHASE 5: Verifying installation..."
-
-# Activate (idempotent)
 eval "$($HOME/miniforge3/bin/mamba shell hook --shell bash)"
 mamba activate imaging_pipeline
 
-# Verify imports
 python << 'EOF'
 import sys
 checks = {
     'aicspylibczi': 'CZI I/O',
-    'SimpleITK': 'Registration',
-    'zarr': 'Storage',
-    'cellpose': 'Segmentation',
-    'napari': 'Visualization',
-    'torch': 'Deep Learning',
-    'pandas': 'Analysis',
+    'SimpleITK':    'Registration',
+    'zarr':         'Storage',
+    'cellpose':     'Segmentation',
+    'napari':       'Visualization',
+    'torch':        'Deep Learning',
+    'pandas':       'Analysis',
 }
-
 failed = []
 for lib, desc in checks.items():
     try:
         __import__(lib)
         print(f"✓ {lib:20} ({desc})")
     except Exception as e:
-        print(f"✗ {lib:20} ({desc}) - {str(e)[:160]}")
+        print(f"✗ {lib:20} ({desc}) - {e}")
         failed.append(lib)
 
 if failed:
@@ -234,30 +197,25 @@ if failed:
 else:
     print("\n✓ All packages verified!")
 
-# GPU check
+# GPU status
 import torch
-print(f"\nGPU Status:")
+print("\nGPU Status:")
 print(f"  PyTorch: {torch.__version__}")
 print(f"  CUDA available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"  GPU: {torch.cuda.get_device_name(0)}")
-    print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory/1e9:.1f} GB")
 EOF
-
 echo ""
 
 ################################################################################
-# PHASE 6: SETUP WORKSPACE
+# PHASE 6: Workspace
 ################################################################################
 log_info "PHASE 6: Setting up workspace..."
-
 mkdir -p ~/imaging-workspace/{configs,scripts,notebooks,example_data,logs}
 mkdir -p /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis,cache}
-
-# Set permissions
 sudo chown -R "$USER":"$USER" /scratch/imaging 2>/dev/null || true
 
-# Create config template
 cat > ~/imaging-workspace/configs/pipeline_config.yaml << 'CONFIG'
 # Lightsheet Imaging Pipeline Configuration
 imaging:
@@ -291,7 +249,7 @@ log_success "Workspace created at ~/imaging-workspace"
 echo ""
 
 ################################################################################
-# PHASE 7: CREATE HELPERS
+# PHASE 7: Helpers
 ################################################################################
 log_info "PHASE 7: Creating helper scripts..."
 
@@ -314,7 +272,6 @@ except Exception as e:
 EOF
 bash
 HELPER
-
 chmod +x ~/start-imaging-pipeline.sh
 
 cat > ~/switch-to-imaging.sh << 'SWITCH'
@@ -323,29 +280,24 @@ eval "$("$HOME/miniforge3/bin/mamba" shell hook --shell bash)"
 mamba activate imaging_pipeline
 bash
 SWITCH
-
 chmod +x ~/switch-to-imaging.sh
 
 log_success "Helper scripts created"
 echo ""
 
 ################################################################################
-# FINAL VERIFICATION
+# PHASE 8: Final checks
 ################################################################################
 log_info "PHASE 8: Final verification..."
-
-# Environment list
 log_success "Available environments:"
 mamba env list | grep -E "^(base|imaging_pipeline)" || true
 
-# Test CZI reading and Cellpose GPU flag (will not run GPU if unavailable)
 python - << 'EOF'
 try:
     from aicspylibczi import CziFile
     print('✓ CZI I/O (aicspylibczi import ok)')
 except Exception as e:
     print(f'⚠ aicspylibczi quick check failed: {e}')
-
 try:
     from cellpose.core import use_gpu
     print(f'✓ Cellpose use_gpu(): {use_gpu()}')
@@ -361,16 +313,9 @@ echo ""
 
 log_info "Installation Summary:"
 echo "  ✓ imaging_pipeline environment created"
-echo "  ✓ All imaging libraries installed"
+echo "  ✓ Imaging libraries installed (conda-forge + pytorch/nvidia; cu124 wheels for Blackwell if needed)"
 echo "  ✓ Workspace at ~/imaging-workspace"
 echo "  ✓ GPU support checked"
-echo ""
-
-log_info "Quick Start:"
-echo "  1) Close and reopen terminal"
-echo "  2) Run: mamba activate imaging_pipeline"
-echo "     OR: ~/start-imaging-pipeline.sh"
-echo "  3) Edit config: ~/imaging-workspace/configs/pipeline_config.yaml"
 echo ""
 
 cat > ~/imaging-pipeline-install.log << LOG
@@ -378,7 +323,7 @@ Imaging Pipeline Installation Log
 Date: $(date)
 User: $USER
 Environment: imaging_pipeline
-GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)
+GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
 LOG
 
 log_success "Installation log: ~/imaging-pipeline-install.log"
