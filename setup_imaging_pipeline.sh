@@ -34,13 +34,19 @@ fi
 log_info "Lightsheet Imaging Pipeline Setup (Separate Environment)"
 echo ""
 
+# Initialize mamba
+log_info "Initializing mamba..."
+eval "$(~/miniforge3/bin/mamba shell hook --shell bash)"
+
 # Check mamba availability
 if ! command -v mamba &>/dev/null; then
-  log_error "Mamba not found. Ensure setup_llm_core.sh has completed first."
+  log_error "Mamba not found. Please ensure Miniforge is installed at ~/miniforge3"
+  log_info "If setup_llm_core.sh hasn't run yet, run it first:"
+  log_info "  bash setup_llm_core.sh"
   exit 1
 fi
 
-log_success "Mamba found."
+log_success "Mamba initialized."
 
 # Check CUDA
 if ! command -v nvidia-smi &>/dev/null; then
