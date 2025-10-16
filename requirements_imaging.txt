@@ -1,0 +1,109 @@
+# Lightsheet Microscopy Image Processing Pipeline Dependencies
+# Install alongside llm-inference environment
+# Usage: pip install -r requirements_imaging.txt
+#
+# Hardware: AMD Threadripper 7970X + RTX Pro 6000 Blackwell (96GB VRAM)
+# PyTorch: 2.10 nightly (CUDA 12.8) - from llm-inference setup
+# Python: 3.11
+#
+# NOTE: These packages are compatible with the nightly PyTorch stack
+# No conflicts with llm-inference (vLLM, transformers, etc.)
+
+# ============================================================================
+# PHASE 1: CZI File I/O & Core I/O
+# ============================================================================
+aicspylibczi>=3.3.0        # Primary CZI reader (C++ backend, fast)
+czifile>=2019.7.2          # Fallback pure-Python CZI reader
+tifffile>=2024.1.0         # TIFF/OME-TIFF I/O
+imagecodecs>=2024.1.0      # Compression codecs (ZSTD, JPEG-XR, etc.)
+
+# ============================================================================
+# PHASE 2: Image Processing Core
+# ============================================================================
+numpy>=1.24.0              # Already installed (llm-inference), included for safety
+scipy>=1.10.0              # Already installed, included for safety
+scikit-image>=0.22.0       # Image processing algorithms (morphology, filters, etc.)
+scikit-learn>=1.3.0        # ML utilities for analysis
+
+# ============================================================================
+# PHASE 3: Registration & Stitching
+# ============================================================================
+SimpleITK>=2.2.0           # Medical image registration (robust, CPU-efficient)
+pycpd>=0.2.1               # Coherent Point Drift (feature-based registration)
+zarr>=2.16.0               # Chunked compressed I/O (critical for large files)
+ome-zarr-py>=0.8.0         # OME-Zarr metadata support
+dask[array]>=2023.12.0     # Parallelized array operations
+dask-jobqueue>=0.9.0       # (Optional) Job queue for distributed compute
+
+# ============================================================================
+# PHASE 4: GPU-Accelerated Segmentation
+# ============================================================================
+# Cellpose: stable version 3.0.8 (3.1.0+ may have torch tensor indexing issues)
+cellpose==3.0.8            # GPU-native cell/nucleus segmentation
+
+# Note: PyTorch/torchvision/torchaudio already from llm-inference (nightly cu128)
+# Do NOT reinstall; it will conflict with existing LLM setup
+
+# ============================================================================
+# PHASE 5: Visualization
+# ============================================================================
+napari>=0.4.18             # Interactive multidimensional image viewer
+napari-aicsimageio>=0.8.1  # Plugin for AICS image formats
+aicsimageio>=0.9.0         # AICS image I/O (supports CZI, OME-TIFF, etc.)
+
+# ============================================================================
+# PHASE 6: Data Analysis & Reporting
+# ============================================================================
+pandas>=2.0.0              # Data frames (likely already installed)
+openpyxl>=3.1.0            # Excel export
+matplotlib>=3.7.0          # Plotting (likely already installed)
+seaborn>=0.13.0            # Statistical visualization
+numpy-stl>=3.1.0           # STL file export (for 3D meshes)
+
+# ============================================================================
+# PHASE 7: Optional Advanced Tools
+# ============================================================================
+# stardist>=0.8.4          # 3D object detection (heavyweight, GPU-intensive)
+# numba>=0.57.0            # JIT compilation for speed-critical code
+# opencv-python>=4.8.0     # Classical computer vision (optional fallback)
+
+# ============================================================================
+# DEVELOPMENT & TESTING (Optional)
+# ============================================================================
+# pytest>=7.4.0             # Testing framework
+# jupyter>=1.0.0            # Notebooks for prototyping
+# ipywidgets>=8.1.0         # Interactive widgets in notebooks
+
+# ============================================================================
+# NOTES ON COMPATIBILITY
+# ============================================================================
+#
+# Why not included (already in llm-inference):
+# - torch>=2.0.0           (PyTorch nightly cu128, from llm-inference)
+# - torchvision            (From llm-inference)
+# - torchaudio             (From llm-inference)
+# - transformers           (From llm-inference, for LLM agent)
+# - huggingface_hub        (From llm-inference)
+# - bitsandbytes           (From llm-inference, optional 4-bit)
+#
+# Why cellpose 3.0.8 (not 3.1.0+):
+# - 3.1.0+ has known torch tensor indexing issues
+# - 3.0.8 is stable and compatible with PyTorch 2.10 nightly
+# - Can upgrade to 3.1+ once torch issues are resolved
+#
+# GPU Memory Sharing:
+# - LLM inference: up to 90GB (vLLM streaming)
+# - Imaging pipeline: up to 60GB (conservative reservation)
+# - Total RTX Pro 6000: 96GB VRAM
+# - Strategy: Sequential or small parallel batches avoid contention
+#
+# CPU Resources:
+# - Threadripper 7970X: 48 cores
+# - Dask workers: 16 (leaves 32 for OS, LLM, other tasks)
+# - Registration/stitching highly parallelizable
+#
+# Storage Performance:
+# - /scratch/imaging: High-speed NVMe (Crucial P2 1TB + Samsung 990 Pro 2TB)
+# - Zarr chunking: Optimal for 256³ or 512³ voxel chunks
+# - Compression: blosc-zstd for speed (15:1 typical compression)
+# ============================================================================
