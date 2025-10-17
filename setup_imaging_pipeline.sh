@@ -29,11 +29,13 @@ fi
 log_info "Lightsheet Imaging Pipeline Setup (FIXED - PyTorch nightly cu128)"
 echo ""
 
-# Initialize mamba in current shell
+# Initialize mamba in current shell with faster solver
 log_info "Initializing mamba…"
 MINIFORGE_HOME="$HOME/miniforge3"
 if [ -d "$MINIFORGE_HOME" ]; then
   eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
+  # Use libmamba solver (faster than classic)
+  export CONDA_SOLVER=libmamba
 else
   log_error "Miniforge not found at $MINIFORGE_HOME. Run setup_llm_core.sh first."
   exit 1
@@ -123,43 +125,73 @@ log_info "PHASE 4: Installing imaging packages…"
 eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
 mamba activate imaging_pipeline
 
-# (A) Core stack from conda-forge with strict version pins
+# (A) Install in stages to identify what's hanging
+log_info "Installing core scientific stack…"
 mamba install -y -c conda-forge \
   "numpy>=1.24.0,<2.0.0" \
   "scipy>=1.10.0" \
+  "pandas>=2.0.0" \
+  "matplotlib>=3.7.0"
+
+log_info "Installing image processing…"
+mamba install -y -c conda-forge \
   "scikit-image>=0.22.0" \
   "scikit-learn>=1.3.0" \
-  "pandas>=2.0.0" \
-  "matplotlib>=3.7.0" \
-  "openpyxl>=3.1.0" \
-  "toolz>=0.11.0" \
-  aicspylibczi czifile imagecodecs \
+  aicspylibczi czifile imagecodecs
+
+log_info "Installing registration & storage…"
+mamba install -y -c conda-forge \
   simpleitk \
-  "zarr>=2.16.0,<3.0.0" ome-zarr \
-  "dask>=2024.2.0" dask-image \
-  napari pyqt \
+  "zarr>=2.16.0,<3.0.0" \
+  ome-zarr
+
+log_info "Installing parallelization…"
+mamba install -y -c conda-forge \
+  "dask>=2024.2.0" \
+  dask-image
+
+log_info "Installing visualization…"
+mamba install -y -c conda-forge \
+  napari pyqt
+
+log_info "Installing analysis & utilities…"
+mamba install -y -c conda-forge \
   "tifffile>=2021.8.30,<2023.3.15" \
   "xarray>=0.16.1,<2023.02.0" \
+  "toolz>=0.11.0" \
   opencv openpyxl seaborn numpy-stl
+
+log_success "Conda packages installed."
+echo ""
 
 # (B) PyTorch nightly cu128 (MATCHING llm-inference setup for Blackwell)
 log_info "Installing PyTorch 2.10 nightly with CUDA 12.8 (Blackwell support)…"
+log_warning "This downloads ~5GB, may take 5-10 minutes…"
+
 # Remove any existing torch trio first (conda or pip)
 mamba remove -y pytorch torchvision torchaudio || true
 python -m pip uninstall -y torch torchvision torchaudio || true
 python -m pip cache purge || true
 
 # Install matching-date nightly cu128 in ONE transaction (critical for alignment)
-python -m pip install --upgrade --pre --force-reinstall \
+# Use verbose output to show progress
+python -m pip install --upgrade --pre --force-reinstall -v \
   --index-url https://download.pytorch.org/whl/nightly/cu128 \
   torch torchvision torchaudio
 
 log_success "PyTorch nightly cu128 installed (Blackwell support)."
+echo ""
 
-# (C) Minimal pip for imaging-specific packages (no deps; conda already satisfied)
-python -m pip install --no-build-isolation --no-deps \
+# (C) Minimal pip for imaging-specific packages
+log_info "Installing cellpose and napari plugins…"
+log_warning "Cellpose is ~200MB, napari-aicsimageio is ~20MB…"
+
+python -m pip install --no-build-isolation --no-deps -v \
   "cellpose==3.0.8" \
   "napari-aicsimageio==0.7.2"
+
+log_success "Cellpose and plugins installed."
+echo ""
 
 # (D) Cellpose runtime deps (explicit) + dependency fixes
 mamba install -y -c conda-forge fastremap numba natsort tqdm roifile
