@@ -123,7 +123,7 @@ log_info "PHASE 4: Installing imaging packages…"
 eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
 mamba activate imaging_pipeline
 
-# (A) Core stack from conda-forge with version constraints (fix dependency conflicts)
+# (A) Core stack from conda-forge with strict version pins
 mamba install -y -c conda-forge \
   "numpy>=1.24.0,<2.0.0" \
   "scipy>=1.10.0" \
@@ -133,13 +133,13 @@ mamba install -y -c conda-forge \
   "matplotlib>=3.7.0" \
   "openpyxl>=3.1.0" \
   "toolz>=0.11.0" \
-  aicspylibczi czifile tifffile imagecodecs \
+  aicspylibczi czifile imagecodecs \
   simpleitk \
   "zarr>=2.16.0,<3.0.0" ome-zarr \
   "dask>=2024.2.0" dask-image \
   napari pyqt \
-  "aicsimageio>=0.9.0" \
-  "lxml>=4.6,<5.0" \
+  "tifffile>=2021.8.30,<2023.3.15" \
+  "xarray>=0.16.1,<2023.02.0" \
   opencv openpyxl seaborn numpy-stl
 
 # (B) PyTorch nightly cu128 (MATCHING llm-inference setup for Blackwell)
