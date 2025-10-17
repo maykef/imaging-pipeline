@@ -29,6 +29,16 @@ fi
 log_info "Lightsheet Imaging Pipeline Setup (FIXED - PyTorch nightly cu128)"
 echo ""
 
+# Initialize mamba in current shell
+log_info "Initializing mamba…"
+MINIFORGE_HOME="$HOME/miniforge3"
+if [ -d "$MINIFORGE_HOME" ]; then
+  eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
+else
+  log_error "Miniforge not found at $MINIFORGE_HOME. Run setup_llm_core.sh first."
+  exit 1
+fi
+
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   log_error "nvidia-smi not found. Install NVIDIA drivers first."
   exit 1
@@ -113,14 +123,23 @@ log_info "PHASE 4: Installing imaging packages…"
 eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
 mamba activate imaging_pipeline
 
-# (A) Core stack from conda-forge (deterministic; avoids pip backtracking)
+# (A) Core stack from conda-forge with version constraints (fix dependency conflicts)
 mamba install -y -c conda-forge \
+  "numpy>=1.24.0,<2.0.0" \
+  "scipy>=1.10.0" \
+  "scikit-image>=0.22.0" \
+  "scikit-learn>=1.3.0" \
+  "pandas>=2.0.0" \
+  "matplotlib>=3.7.0" \
+  "openpyxl>=3.1.0" \
+  "toolz>=0.11.0" \
   aicspylibczi czifile tifffile imagecodecs \
   simpleitk \
   "zarr>=2.16.0,<3.0.0" ome-zarr \
-  dask dask-image \
+  "dask>=2024.2.0" dask-image \
   napari pyqt \
-  aicsimageio \
+  "aicsimageio>=0.9.0" \
+  "lxml>=4.6,<5.0" \
   opencv openpyxl seaborn numpy-stl
 
 # (B) PyTorch nightly cu128 (MATCHING llm-inference setup for Blackwell)
@@ -142,10 +161,17 @@ python -m pip install --no-build-isolation --no-deps \
   "cellpose==3.0.8" \
   "napari-aicsimageio==0.7.2"
 
-# (D) Cellpose runtime deps (explicit)
+# (D) Cellpose runtime deps (explicit) + dependency fixes
 mamba install -y -c conda-forge fastremap numba natsort tqdm roifile
 
-log_success "All imaging packages installed."
+# (E) FIX dependency conflicts after pip installations
+log_info "Fixing dependency conflicts…"
+# Reinstall pandas/numpy with proper constraints
+pip install --force-reinstall --no-deps pandas>=2.0.0
+pip install --force-reinstall --no-deps 'numpy>=1.24.0,<2.0.0'
+pip install --force-reinstall --no-deps 'toolz>=0.11.0'
+
+log_success "All imaging packages installed & dependencies fixed."
 echo ""
 
 # -------------------------------- PHASE 5: Verify ------------------------------
