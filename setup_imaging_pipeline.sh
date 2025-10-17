@@ -276,8 +276,9 @@ echo ""
 # ------------------------------- PHASE 6: Workspace ----------------------------
 log_info "PHASE 6: Setting up workspace…"
 mkdir -p "$HOME/imaging-workspace"/{configs,scripts,notebooks,example_data,logs}
-sudo mkdir -p /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis,cache} 2>/dev/null || true
+sudo mkdir -p /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis,cache} 2>/dev/null || mkdir -p /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis,cache}
 sudo chown -R "$USER":"$USER" /scratch/imaging 2>/dev/null || true
+chmod -R 755 /scratch/imaging 2>/dev/null || true
 
 cat > "$HOME/imaging-workspace/configs/pipeline_config.yaml" << 'CONFIG'
 # Lightsheet Imaging Pipeline Configuration
@@ -309,6 +310,7 @@ hardware:
 CONFIG
 
 log_success "Workspace created at ~/imaging-workspace"
+log_success "Data directories ready at /scratch/imaging"
 echo ""
 
 # ----------------------------- PHASE 7: Helper scripts -------------------------
