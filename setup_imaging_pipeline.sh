@@ -1,10 +1,10 @@
 #!/bin/bash
 
 ################################################################################
-# setup_imaging_pipeline.sh (FIXED)
+# setup_imaging_pipeline.sh (FIXED - Variable Scoping)
 #
 # Lightsheet Microscopy Image Processing Pipeline – Full Installer
-# FIXED: Uses PyTorch nightly cu128 (matches llm-inference setup for Blackwell)
+# FIXED: Proper Miniforge detection and MAMBA_ROOT_PREFIX handling
 #
 # Usage: bash setup_imaging_pipeline.sh
 ################################################################################
@@ -26,21 +26,52 @@ if [ "${EUID:-$(id -u)}" -eq 0 ]; then
 fi
 
 # --------------------------------- Pre-Flight ---------------------------------
-log_info "Lightsheet Imaging Pipeline Setup (FIXED - PyTorch nightly cu128)"
+log_info "Lightsheet Imaging Pipeline Setup (PyTorch nightly cu128)"
 echo ""
 
-# Initialize mamba in current shell with faster solver
-log_info "Initializing mamba…"
+# Define MINIFORGE_HOME at the top (used throughout)
 MINIFORGE_HOME="$HOME/miniforge3"
-if [ -d "$MINIFORGE_HOME" ]; then
-  eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
-  # Use libmamba solver (faster than classic)
-  export CONDA_SOLVER=libmamba
+
+# Check if Miniforge exists, install if not
+if [ ! -d "$MINIFORGE_HOME" ]; then
+  log_warning "Miniforge not found. Installing to $MINIFORGE_HOME…"
+  INST="/tmp/Miniforge3-Linux-x86_64.sh"
+  URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
+  
+  if [ ! -f "$INST" ]; then
+    log_info "Downloading Miniforge installer…"
+    wget -O "$INST" "$URL" --progress=bar:force 2>&1 || {
+      log_error "Failed to download Miniforge installer"
+      exit 1
+    }
+  fi
+  
+  log_info "Installing Miniforge…"
+  bash "$INST" -b -p "$MINIFORGE_HOME" || {
+    log_error "Miniforge installation failed"
+    exit 1
+  }
+  
+  log_success "Miniforge installed to $MINIFORGE_HOME"
 else
-  log_error "Miniforge not found at $MINIFORGE_HOME. Run setup_llm_core.sh first."
+  log_success "Miniforge found at $MINIFORGE_HOME"
+fi
+
+# Initialize mamba in current shell
+log_info "Initializing mamba…"
+export MAMBA_ROOT_PREFIX="$MINIFORGE_HOME"
+
+# Source mamba shell hook
+if [ -f "$MINIFORGE_HOME/bin/mamba" ]; then
+  eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
+  export CONDA_SOLVER=libmamba
+  log_success "Mamba initialized"
+else
+  log_error "Mamba binary not found at $MINIFORGE_HOME/bin/mamba"
   exit 1
 fi
 
+# Verify NVIDIA GPU
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   log_error "nvidia-smi not found. Install NVIDIA drivers first."
   exit 1
@@ -50,6 +81,7 @@ GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1 || echo 
 GPU_MEMORY="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader | head -1 || echo "N/A")"
 log_info "GPU detected: ${GPU_NAME} (${GPU_MEMORY})"
 
+# Check disk space
 AVAILABLE_SPACE_KB=$(df -k "$HOME" | tail -1 | awk '{print $4}')
 REQUIRED_SPACE_KB=$((20 * 1024 * 1024))  # 20GB
 if [ "$AVAILABLE_SPACE_KB" -lt "$REQUIRED_SPACE_KB" ]; then
@@ -63,28 +95,8 @@ echo ""
 read -p "Continue with installation? (y/N): " -n 1 -r; echo
 [[ $REPLY =~ ^[Yy]$ ]] || { log_info "Installation cancelled."; exit 0; }
 
-# ------------------------------ PHASE 1: Miniforge -----------------------------
-log_info "PHASE 1: Checking for Miniforge…"
-MINIFORGE_HOME="$HOME/miniforge3"
-
-if [ -d "$MINIFORGE_HOME" ]; then
-  log_success "Miniforge found at $MINIFORGE_HOME"
-elif command -v mamba >/dev/null 2>&1; then
-  log_success "Mamba available in PATH"
-else
-  log_warning "Miniforge not found. Installing…"
-  INST="/tmp/Miniforge3-Linux-x86_64.sh"
-  URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
-  [ -f "$INST" ] || wget -O "$INST" "$URL" --progress=bar:force 2>&1
-  bash "$INST" -b -p "$MINIFORGE_HOME"
-  log_success "Miniforge installed."
-fi
-echo ""
-
-# ------------------------------ PHASE 2: Init mamba ----------------------------
-log_info "PHASE 2: Initializing mamba…"
-export MAMBA_ROOT_PREFIX="$MINIFORGE_HOME"
-eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
+# ------------------------------ PHASE 1: Shell Init ----------------------------
+log_info "PHASE 1: Configuring shell integration…"
 
 # Persist shell init (work across mamba versions; never fail hard)
 set +e
@@ -95,14 +107,23 @@ else
 fi
 "$MINIFORGE_HOME/bin/conda" init bash >/dev/null 2>&1 || true
 set -e
-source ~/.bashrc 2>/dev/null || true
 
-command -v mamba >/dev/null 2>&1 || { log_error "Mamba initialization failed."; exit 1; }
-log_success "Mamba: $(mamba --version)"
+# Re-source bashrc if it exists
+if [ -f "$HOME/.bashrc" ]; then
+  source "$HOME/.bashrc" 2>/dev/null || true
+fi
+
+# Verify mamba is available
+if ! command -v mamba >/dev/null 2>&1; then
+  log_error "Mamba initialization failed. Cannot find mamba in PATH."
+  exit 1
+fi
+
+log_success "Mamba: $(mamba --version | head -1)"
 echo ""
 
-# --------------------------- PHASE 3: Create environment -----------------------
-log_info "PHASE 3: Creating imaging_pipeline environment…"
+# --------------------------- PHASE 2: Create environment -----------------------
+log_info "PHASE 2: Creating imaging_pipeline environment…"
 
 if mamba env list | grep -qE '^\s*imaging_pipeline\s'; then
   log_warning "imaging_pipeline exists. Removing…"
@@ -120,8 +141,10 @@ fi
 log_success "Base environment created."
 echo ""
 
-# -------- PHASE 4: Install stack (conda-forge) + PyTorch NIGHTLY cu128 --
-log_info "PHASE 4: Installing imaging packages…"
+# -------- PHASE 3: Install stack (conda-forge) + PyTorch NIGHTLY cu128 --------
+log_info "PHASE 3: Installing imaging packages…"
+
+# Activate the environment
 eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
 mamba activate imaging_pipeline
 
@@ -169,12 +192,11 @@ log_info "Installing PyTorch 2.10 nightly with CUDA 12.8 (Blackwell support)…"
 log_warning "This downloads ~5GB, may take 5-10 minutes…"
 
 # Remove any existing torch trio first (conda or pip)
-mamba remove -y pytorch torchvision torchaudio || true
-python -m pip uninstall -y torch torchvision torchaudio || true
-python -m pip cache purge || true
+mamba remove -y pytorch torchvision torchaudio 2>/dev/null || true
+python -m pip uninstall -y torch torchvision torchaudio 2>/dev/null || true
+python -m pip cache purge 2>/dev/null || true
 
 # Install matching-date nightly cu128 in ONE transaction (critical for alignment)
-# Use verbose output to show progress
 python -m pip install --upgrade --pre --force-reinstall -v \
   --index-url https://download.pytorch.org/whl/nightly/cu128 \
   torch torchvision torchaudio
@@ -194,22 +216,20 @@ log_success "Cellpose and plugins installed."
 echo ""
 
 # (D) Cellpose runtime deps (explicit) + dependency fixes
+log_info "Installing Cellpose dependencies…"
 mamba install -y -c conda-forge fastremap numba natsort tqdm roifile
 
 # (E) FIX dependency conflicts after pip installations
 log_info "Fixing dependency conflicts…"
-# Reinstall pandas/numpy with proper constraints
-pip install --force-reinstall --no-deps pandas>=2.0.0
+pip install --force-reinstall --no-deps 'pandas>=2.0.0'
 pip install --force-reinstall --no-deps 'numpy>=1.24.0,<2.0.0'
 pip install --force-reinstall --no-deps 'toolz>=0.11.0'
 
 log_success "All imaging packages installed & dependencies fixed."
 echo ""
 
-# -------------------------------- PHASE 5: Verify ------------------------------
-log_info "PHASE 5: Verifying installation…"
-eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
-mamba activate imaging_pipeline
+# -------------------------------- PHASE 4: Verify ------------------------------
+log_info "PHASE 4: Verifying installation…"
 
 python << 'EOF'
 import sys, importlib, warnings
@@ -271,14 +291,27 @@ if failed:
 else:
     print("✅ All packages verified! GPU support active.")
 EOF
+
+if [ $? -ne 0 ]; then
+  log_error "Verification failed. Check the output above."
+  exit 1
+fi
 echo ""
 
-# ------------------------------- PHASE 6: Workspace ----------------------------
-log_info "PHASE 6: Setting up workspace…"
+# ------------------------------- PHASE 5: Workspace ----------------------------
+log_info "PHASE 5: Setting up workspace…"
 mkdir -p "$HOME/imaging-workspace"/{configs,scripts,notebooks,example_data,logs}
-sudo mkdir -p /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis,cache} 2>/dev/null || mkdir -p /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis,cache}
-sudo chown -R "$USER":"$USER" /scratch/imaging 2>/dev/null || true
-chmod -R 755 /scratch/imaging 2>/dev/null || true
+
+# Create /scratch/imaging with proper permissions
+if [ -w /scratch ]; then
+  mkdir -p /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis,cache}
+  chmod -R 755 /scratch/imaging 2>/dev/null || true
+else
+  sudo mkdir -p /scratch/imaging/{raw,stitched,deconvolved,segmented,analysis,cache} 2>/dev/null || \
+    mkdir -p "$HOME/scratch/imaging"/{raw,stitched,deconvolved,segmented,analysis,cache}
+  sudo chown -R "$USER":"$USER" /scratch/imaging 2>/dev/null || true
+  chmod -R 755 /scratch/imaging 2>/dev/null || chmod -R 755 "$HOME/scratch/imaging" 2>/dev/null || true
+fi
 
 cat > "$HOME/imaging-workspace/configs/pipeline_config.yaml" << 'CONFIG'
 # Lightsheet Imaging Pipeline Configuration
@@ -313,8 +346,8 @@ log_success "Workspace created at ~/imaging-workspace"
 log_success "Data directories ready at /scratch/imaging"
 echo ""
 
-# ----------------------------- PHASE 7: Helper scripts -------------------------
-log_info "PHASE 7: Creating helper scripts…"
+# ----------------------------- PHASE 6: Helper scripts -------------------------
+log_info "PHASE 6: Creating helper scripts…"
 
 cat > "$HOME/start-imaging-pipeline.sh" << 'HELPER'
 #!/bin/bash
@@ -346,10 +379,11 @@ chmod +x "$HOME/switch-to-imaging.sh"
 log_success "Helper scripts created"
 echo ""
 
-# ------------------------------ PHASE 8: Final checks --------------------------
-log_info "PHASE 8: Final verification…"
+# ------------------------------ PHASE 7: Final checks --------------------------
+log_info "PHASE 7: Final verification…"
 log_success "Available environments:"
 mamba env list | grep -E "^(base|imaging_pipeline|llm-inference)" || true
+echo ""
 
 python - << 'EOF'
 try:
@@ -372,6 +406,7 @@ log_success "=========================================="
 echo ""
 
 log_info "Installation Summary:"
+echo "  ✓ Miniforge installed/verified at $MINIFORGE_HOME"
 echo "  ✓ imaging_pipeline environment created (Python 3.11)"
 echo "  ✓ Imaging libs installed via conda-forge"
 echo "  ✓ PyTorch 2.10 NIGHTLY cu128 (Blackwell GPU support)"
@@ -382,14 +417,15 @@ echo "  ✓ Separate from llm-inference (no conflicts)"
 echo ""
 
 cat > "$HOME/imaging-pipeline-install.log" << LOG
-Imaging Pipeline Installation Log (FIXED)
+Imaging Pipeline Installation Log
 Date: $(date)
 User: $USER
+Miniforge: $MINIFORGE_HOME
 Environment: imaging_pipeline
 GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
-PyTorch: $(python -c 'import torch; print(torch.__version__)' 2>/dev/null)
-CUDA: $(python -c 'import torch; print(torch.version.cuda)' 2>/dev/null)
-Compute Capability: $(python -c 'import torch; cap = torch.cuda.get_device_capability(0); print(f"sm_{cap[0]}{cap[1]}")' 2>/dev/null)
+PyTorch: $(python -c 'import torch; print(torch.__version__)' 2>/dev/null || echo "N/A")
+CUDA: $(python -c 'import torch; print(torch.version.cuda)' 2>/dev/null || echo "N/A")
+Compute Capability: $(python -c 'import torch; cap = torch.cuda.get_device_capability(0); print(f"sm_{cap[0]}{cap[1]}")' 2>/dev/null || echo "N/A")
 Blackwell Support: ENABLED
 LOG
 
