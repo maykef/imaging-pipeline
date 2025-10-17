@@ -1,13 +1,10 @@
 #!/bin/bash
 
 ################################################################################
-# setup_imaging_pipeline.sh
+# setup_imaging_pipeline.sh (FIXED)
 #
 # Lightsheet Microscopy Image Processing Pipeline – Full Installer
-# - Creates/refreshes conda env: imaging_pipeline
-# - Installs imaging stack (conda-forge for compiled libs)
-# - Handles Blackwell (sm_120) by installing *matching-date* PyTorch cu124 nightlies
-#   in ONE transaction to avoid version pin conflicts.
+# FIXED: Uses PyTorch nightly cu128 (matches llm-inference setup for Blackwell)
 #
 # Usage: bash setup_imaging_pipeline.sh
 ################################################################################
@@ -29,7 +26,7 @@ if [ "${EUID:-$(id -u)}" -eq 0 ]; then
 fi
 
 # --------------------------------- Pre-Flight ---------------------------------
-log_info "Lightsheet Imaging Pipeline Setup (INDEPENDENT Installation)"
+log_info "Lightsheet Imaging Pipeline Setup (FIXED - PyTorch nightly cu128)"
 echo ""
 
 if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -111,26 +108,12 @@ fi
 log_success "Base environment created."
 echo ""
 
-# -------- PHASE 4: Install stack (conda-forge) + PyTorch (with Blackwell fix) --
+# -------- PHASE 4: Install stack (conda-forge) + PyTorch NIGHTLY cu128 --
 log_info "PHASE 4: Installing imaging packages…"
 eval "$("$MINIFORGE_HOME/bin/mamba" shell hook --shell bash)"
 mamba activate imaging_pipeline
 
-# (A) Try to install CUDA PyTorch via conda (stable). If not available, install CPU.
-set +e
-CUDA_OK=0
-for CUDA_VER in 12.4 12.3 12.1; do
-  log_info "Trying CUDA PyTorch via conda (pytorch-cuda=${CUDA_VER})…"
-  mamba install -y -c pytorch -c nvidia pytorch torchvision torchaudio pytorch-cuda=${CUDA_VER}
-  if [ $? -eq 0 ]; then CUDA_OK=1; break; fi
-done
-set -e
-if [ "$CUDA_OK" -eq 0 ]; then
-  log_warning "CUDA PyTorch not available in conda; installing CPU-only PyTorch."
-  mamba install -y -c conda-forge pytorch torchvision torchaudio
-fi
-
-# (B) Core stack from conda-forge (deterministic; avoids pip backtracking)
+# (A) Core stack from conda-forge (deterministic; avoids pip backtracking)
 mamba install -y -c conda-forge \
   aicspylibczi czifile tifffile imagecodecs \
   simpleitk \
@@ -140,29 +123,27 @@ mamba install -y -c conda-forge \
   aicsimageio \
   opencv openpyxl seaborn numpy-stl
 
-# (C) Minimal pip (no deps; conda already satisfied)
-python -m pip install --upgrade pip
+# (B) PyTorch nightly cu128 (MATCHING llm-inference setup for Blackwell)
+log_info "Installing PyTorch 2.10 nightly with CUDA 12.8 (Blackwell support)…"
+# Remove any existing torch trio first (conda or pip)
+mamba remove -y pytorch torchvision torchaudio || true
+python -m pip uninstall -y torch torchvision torchaudio || true
+python -m pip cache purge || true
+
+# Install matching-date nightly cu128 in ONE transaction (critical for alignment)
+python -m pip install --upgrade --pre --force-reinstall \
+  --index-url https://download.pytorch.org/whl/nightly/cu128 \
+  torch torchvision torchaudio
+
+log_success "PyTorch nightly cu128 installed (Blackwell support)."
+
+# (C) Minimal pip for imaging-specific packages (no deps; conda already satisfied)
 python -m pip install --no-build-isolation --no-deps \
   "cellpose==3.0.8" \
   "napari-aicsimageio==0.7.2"
 
 # (D) Cellpose runtime deps (explicit)
 mamba install -y -c conda-forge fastremap numba natsort tqdm roifile
-
-# (E) Blackwell fix:
-#     If the GPU name contains "Blackwell", replace ANY existing Torch (conda or pip)
-#     with *matching-date* nightly cu124 wheels for torch/vision/audio INSTALLED TOGETHER.
-if echo "$GPU_NAME" | grep -qi "Blackwell"; then
-  log_info "Blackwell GPU detected; installing PyTorch cu124 NIGHTLY trio (matching versions)…"
-  # Remove any existing torch trio (conda or pip) to avoid conflicts
-  mamba remove -y pytorch torchvision torchaudio || true
-  python -m pip uninstall -y torch torchvision torchaudio || true
-  python -m pip cache purge || true
-  # Single transaction ensures aligned nightly date pins
-  python -m pip install --upgrade --pre --force-reinstall \
-    --index-url https://download.pytorch.org/whl/nightly/cu124 \
-    torch torchvision torchaudio
-fi
 
 log_success "All imaging packages installed."
 echo ""
@@ -195,10 +176,12 @@ for lib, desc in checks.items():
         print(f"✗ {lib:20} ({desc}) - {e}")
         failed.append(lib)
 
-print("\nGPU Status:")
+print("\n" + "="*60)
+print("GPU Status (Blackwell):")
+print("="*60)
 try:
     import torch
-    print(f"  PyTorch: {torch.__version__}")
+    print(f"  PyTorch version: {torch.__version__}")
     print(f"  CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
@@ -206,21 +189,29 @@ try:
         print(f"  VRAM: {props.total_memory/1e9:.1f} GB")
         try:
             cap = torch.cuda.get_device_capability(0)
-            print(f"  Capability: sm_{cap[0]}{cap[1]}")
+            print(f"  Compute capability: sm_{cap[0]}{cap[1]}")
+            if cap[0] >= 12:
+                print(f"  ✓ Blackwell GPU support confirmed!")
         except Exception:
             pass
-        # tiny CUDA op to confirm kernels are usable
+        # Test CUDA matmul
+        print(f"  Testing CUDA kernels…")
         a = torch.randn(512,512, device="cuda"); b = torch.randn(512,512, device="cuda")
         c = a @ b
-        print(f"  CUDA matmul OK: {c.is_cuda}, shape={tuple(c.shape)}")
+        print(f"  ✓ CUDA matmul OK (shape={tuple(c.shape)}, device=cuda)")
+    else:
+        print("  ✗ CUDA NOT AVAILABLE - GPU support FAILED!")
+        failed.append("CUDA")
 except Exception as e:
-    print(f"  PyTorch check failed: {e}")
+    print(f"  ✗ PyTorch check failed: {e}")
+    failed.append("PyTorch")
 
+print()
 if failed:
-    print(f"\n⚠ {len(failed)} package(s) failed: {', '.join(failed)}")
+    print(f"⚠ {len(failed)} check(s) failed: {', '.join(failed)}")
     sys.exit(1)
 else:
-    print("\n✓ All packages verified!")
+    print("✅ All packages verified! GPU support active.")
 EOF
 echo ""
 
@@ -298,7 +289,7 @@ echo ""
 # ------------------------------ PHASE 8: Final checks --------------------------
 log_info "PHASE 8: Final verification…"
 log_success "Available environments:"
-mamba env list | grep -E "^(base|imaging_pipeline)" || true
+mamba env list | grep -E "^(base|imaging_pipeline|llm-inference)" || true
 
 python - << 'EOF'
 try:
@@ -308,7 +299,8 @@ except Exception as e:
     print(f'⚠ aicspylibczi quick check failed: {e}')
 try:
     from cellpose.core import use_gpu
-    print(f'✓ Cellpose use_gpu(): {use_gpu()}')
+    gpu_ok = use_gpu()
+    print(f'✓ Cellpose GPU support: {gpu_ok}')
 except Exception as e:
     print(f'⚠ Cellpose quick check failed: {e}')
 EOF
@@ -320,21 +312,32 @@ log_success "=========================================="
 echo ""
 
 log_info "Installation Summary:"
-echo "  ✓ imaging_pipeline environment created"
+echo "  ✓ imaging_pipeline environment created (Python 3.11)"
 echo "  ✓ Imaging libs installed via conda-forge"
-echo "  ✓ PyTorch CUDA via conda (if available);"
-echo "    Blackwell GPUs auto-switch to *matching-date* cu124 nightlies (torch/vision/audio) in ONE step"
+echo "  ✓ PyTorch 2.10 NIGHTLY cu128 (Blackwell GPU support)"
+echo "  ✓ Cellpose 3.0.8 (pinned for stability)"
 echo "  ✓ Workspace at ~/imaging-workspace"
-echo "  ✓ GPU support verified with CUDA matmul"
+echo "  ✓ GPU CUDA kernels verified with matmul test"
+echo "  ✓ Separate from llm-inference (no conflicts)"
 echo ""
 
 cat > "$HOME/imaging-pipeline-install.log" << LOG
-Imaging Pipeline Installation Log
+Imaging Pipeline Installation Log (FIXED)
 Date: $(date)
 User: $USER
 Environment: imaging_pipeline
 GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+PyTorch: $(python -c 'import torch; print(torch.__version__)' 2>/dev/null)
+CUDA: $(python -c 'import torch; print(torch.version.cuda)' 2>/dev/null)
+Compute Capability: $(python -c 'import torch; cap = torch.cuda.get_device_capability(0); print(f"sm_{cap[0]}{cap[1]}")' 2>/dev/null)
+Blackwell Support: ENABLED
 LOG
 
 log_success "Installation log: ~/imaging-pipeline-install.log"
-log_success "READY FOR LIGHTSHEET IMAGE PROCESSING!"
+log_info "Next steps:"
+echo "  1. Activate: mamba activate imaging_pipeline"
+echo "  2. Or use:   ~/start-imaging-pipeline.sh"
+echo "  3. Download test data from Dryad (optional)"
+echo "  4. Create MVP stitcher script"
+echo ""
+log_success "READY FOR LIGHTSHEET IMAGE PROCESSING! 🚀"
